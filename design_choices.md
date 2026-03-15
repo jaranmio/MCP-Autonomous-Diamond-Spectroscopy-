@@ -21,9 +21,9 @@ uv sync
 
 ---
 
-### Folder name vs. Python package name mismatch
+### Folder name vs. Python package name difference
 
-Top-Level python package name is mcp-diamond-spectroscopy
+Top-Level python package name is mcp-diamond-spectroscopy (different from top-level folder name)
 
 ---
 
