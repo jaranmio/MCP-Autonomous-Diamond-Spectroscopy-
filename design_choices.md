@@ -1,9 +1,3 @@
-# MCP-Autonomous-Diamond-Spectroscopy
-
-Autonomous diamond color center spectral microscopy pipeline using the Model Context Protocol (MCP).
-
----
-
 ## Dev Environment Notes
 
 ### Why `uv` instead of `pip`
