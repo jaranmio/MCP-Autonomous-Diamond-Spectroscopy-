@@ -21,6 +21,12 @@ Top-Level python package name is mcp-diamond-spectroscopy (different from top-le
 
 ---
 
+### Not using Colab anymore, runs loally
+
+The file "Update of Automated optical alignment using digital twins.ipynb" initially ran on google server to use colab functionalities like "drive.mount('/content/drive')". To make the project more self-contained, I changed that in favor of accessing files locally (from presumably cloned repo).
+
+---
+
 ## Quickstart
 
 ```bash
