@@ -1,0 +1,92 @@
+{
+  "run_uuid": "889c5551-590b-455b-9b84-dd935b925c0c",
+  "utc_start": "2026-03-28T21:36:54.187126+00:00",
+  "hostname": "DESKTOP-LO8QAB7",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "python": "3.12.13 | packaged by Anaconda, Inc. | (main, Mar 19 2026, 20:16:45) [MSC v.1942 64 bit (AMD64)]",
+  "git_commit": "4c4c94f9de841c44faa59ce3bba11609d055a886",
+  "script": "D:\\MCP-Autonomous-Diamond-Spectroscopy-\\Miscellaneous\\thorlabs_xa_repeatability_study.py",
+  "protocol": {
+    "study_protocol_name": "thorlabs_xa_repeatability_unidirectional_retreat",
+    "study_protocol_version": "1.0",
+    "device_serial": "27272875",
+    "target_positions": [
+      0.0,
+      1.0,
+      0.0,
+      2.0,
+      0.0
+    ],
+    "num_cycles": 25,
+    "retreat_offset": 2.5,
+    "settle_after_retreat_s": 1.5,
+    "settle_after_nominal_s": 2.0,
+    "samples_per_point": 1,
+    "sample_interval_s": 0.05,
+    "distance_unit_type": "Millimetres",
+    "travel_limits_raw": [
+      0.0,
+      6.0
+    ],
+    "thorlabs_dotnet_dir": "C:\\Program Files\\Thorlabs XA\\SDK\\.NET Framework (C#)\\Libraries\\x64"
+  },
+  "utc_end": "2026-03-28T21:53:20.933333+00:00",
+  "summary_targets": [
+    {
+      "target_index": 0,
+      "target_nominal_mm": 0.0,
+      "n": 25,
+      "mean_mm": 0.0,
+      "std_sample_mm": 0.0,
+      "min_mm": 0.0,
+      "max_mm": 0.0,
+      "range_mm": 0.0,
+      "mean_residual_mm": 0.0
+    },
+    {
+      "target_index": 1,
+      "target_nominal_mm": 1.0,
+      "n": 25,
+      "mean_mm": 1.0000011575762207,
+      "std_sample_mm": 0.0,
+      "min_mm": 1.0000011575762207,
+      "max_mm": 1.0000011575762207,
+      "range_mm": 0.0,
+      "mean_residual_mm": 1.1575762206561535e-06
+    },
+    {
+      "target_index": 2,
+      "target_nominal_mm": 0.0,
+      "n": 25,
+      "mean_mm": 0.0,
+      "std_sample_mm": 0.0,
+      "min_mm": 0.0,
+      "max_mm": 0.0,
+      "range_mm": 0.0,
+      "mean_residual_mm": 0.0
+    },
+    {
+      "target_index": 3,
+      "target_nominal_mm": 2.0,
+      "n": 25,
+      "mean_mm": 2.0000023151524413,
+      "std_sample_mm": 0.0,
+      "min_mm": 2.0000023151524413,
+      "max_mm": 2.0000023151524413,
+      "range_mm": 0.0,
+      "mean_residual_mm": 2.315152441312307e-06
+    },
+    {
+      "target_index": 4,
+      "target_nominal_mm": 0.0,
+      "n": 25,
+      "mean_mm": 0.0,
+      "std_sample_mm": 0.0,
+      "min_mm": 0.0,
+      "max_mm": 0.0,
+      "range_mm": 0.0,
+      "mean_residual_mm": 0.0
+    }
+  ],
+  "csv_file": "samples.csv"
+}
