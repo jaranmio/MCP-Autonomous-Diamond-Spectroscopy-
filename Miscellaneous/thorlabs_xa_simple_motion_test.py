@@ -1,151 +1,212 @@
 """
-Thorlabs XA — relative moves in millimetres via the native C API (ctypes).
+Thorlabs XA — relative moves in millimetres via the .NET API (pythonnet).
 
-Ground truth: Native (C, C++)\\Examples\\main.c and tlmc_xa_native_api.h in the Thorlabs XA SDK:
-  - TLMC_Startup(NULL), TLMC_Open(pDevice, NULL, TLMC_OperatingMode_Default, &h)
-  - TLMC_LoadParams (main.c calls Example_LoadParams)
-  - TLMC_SetEnableState(..., TLMC_Enabled, TLMC_InfiniteWait) — Example_ChangeEnableState
-  - TLMC_ConvertFromPhysicalToDevice(..., TLMC_ScaleType_Distance, TLMC_Unit_Millimetres, ...) — Example_UnitConverter
-  - TLMC_Move(..., TLMC_MoveMode_Relative, int32_device_units, TLMC_InfiniteWait) — Example_MoveRelative
-  - TLMC_Close, TLMC_Shutdown
+Aligned with the official SDK sources under
+``C:\\Program Files\\Thorlabs XA\\SDK\\.NET Framework (C#)\\``:
 
-Requires: 64-bit Python on Windows; TLMC_XA_Native.dll (x64) from the SDK install.
+  - ``Examples\\Program.cs`` — ``SystemManager.Create()``, ``Startup()``,
+    ``TryOpenDevice(id, \"\", OperatingModes.Default, out device)``, ``device.Close()``,
+    ``Shutdown()``.
+  - ``Examples\\ExamplesUsingInterfaces.cs`` — ``LoadParams``, ``SetEnableState(Enabled, …)``,
+    ``IUnitConverter`` (``FromDeviceUnitToPhysical`` then ``FromPhysicalToDeviceUnit`` with
+    ``UnitType`` from the conversion result, same as ``UnitConverter`` example),
+    ``IMove.Move(MoveMode.RelativeMove, …, Timeout.Infinite)``.
+
+Managed assemblies: ``Libraries\\x64\\tlmc_xa_dotnet.dll`` (override with
+``OPTICS_THORLABS_DOTNET_DIR``).
+
+Requires: 64-bit Python on Windows; ``pip install pythonnet``.
 """
 
 from __future__ import annotations
 
-import ctypes
+import importlib
 import os
 import sys
 import time
-from ctypes import POINTER, byref, c_int32, c_int64, c_uint16, c_uint32, c_uint8
+from typing import Any
 
-# --- Same literals as tlmc_xa_native_api.h / main.c ---------------------------------
-TLMC_Success = 0
+try:
+    from mcp_servers.dotnet_cast import cast_clr_iface as _cast
+except ImportError:
+    _mcp_servers_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mcp_servers"
+    )
+    if _mcp_servers_dir not in sys.path:
+        sys.path.insert(0, _mcp_servers_dir)
+    from dotnet_cast import cast_clr_iface as _cast
 
-TLMC_OperatingMode_Default = 0x00000100  # TLMC_OperatingMode_Default == TLMC_OperatingMode_Apt
-
-TLMC_MoveMode_Relative = 2  # TLMC_MoveMode_Relative
-
-TLMC_ScaleType_Distance = 1  # TLMC_ScaleType_Distance
-TLMC_Unit_Millimetres = 1  # TLMC_Unit_Millimetres
-
-TLMC_Enabled = 0x01  # TLMC_Enabled
-
-TLMC_InfiniteWait = -1  # TLMC_InfiniteWait
-
-# Device serial for TLMC_Open (main.c passes a string literal; no device-list step).
 DEVICE_SERIAL = "27272875"
 
-# Single-shot demo: relative move in millimetres (used by run_single_motion).
 RELATIVE_MOVE_MM = 2.0
-
-# Oscillation: ± this distance (mm), this many full back-and-forth cycles (each cycle = +A then −A).
 OSCILLATION_AMPLITUDE_MM = 1.0
 OSCILLATION_CYCLES = 20
-OSCILLATION_PAUSE_S = 0.0  # optional pause between half-strokes
+OSCILLATION_PAUSE_S = 0.0
 
-# Default x64 native DLL (SDK layout).
-DEFAULT_DLL = r"C:\Program Files\Thorlabs XA\SDK\Native (C, C++)\Libraries\x64\TLMC_XA_Native.dll"
-
-
-def _load_dll() -> ctypes.WinDLL:
-    path = os.environ.get("TLMC_XA_NATIVE_DLL", "").strip() or DEFAULT_DLL
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"Native DLL not found: {path}")
-    return ctypes.WinDLL(path)
+THORLABS_XA_MANAGED_DLL = "tlmc_xa_dotnet.dll"
+_DEFAULT_THORLABS_XA_DOTNET_DIR = (
+    r"C:\Program Files\Thorlabs XA\SDK\.NET Framework (C#)\Libraries\x64"
+)
 
 
-def _bind(dll: ctypes.WinDLL) -> None:
-    dll.TLMC_Startup.argtypes = [ctypes.c_char_p]
-    dll.TLMC_Startup.restype = c_uint16
-
-    dll.TLMC_Shutdown.argtypes = []
-    dll.TLMC_Shutdown.restype = c_uint16
-
-    dll.TLMC_Open.argtypes = [ctypes.c_char_p, ctypes.c_char_p, c_uint32, POINTER(c_uint32)]
-    dll.TLMC_Open.restype = c_uint16
-
-    dll.TLMC_Close.argtypes = [c_uint32]
-    dll.TLMC_Close.restype = c_uint16
-
-    dll.TLMC_LoadParams.argtypes = [c_uint32]
-    dll.TLMC_LoadParams.restype = c_uint16
-
-    dll.TLMC_SetEnableState.argtypes = [c_uint32, c_uint8, c_int64]
-    dll.TLMC_SetEnableState.restype = c_uint16
-
-    dll.TLMC_ConvertFromPhysicalToDevice.argtypes = [
-        c_uint32,
-        c_uint16,
-        c_uint16,
-        ctypes.c_double,
-        POINTER(c_int64),
-    ]
-    dll.TLMC_ConvertFromPhysicalToDevice.restype = c_uint16
-
-    dll.TLMC_Move.argtypes = [c_uint32, c_uint8, c_int32, c_int64]
-    dll.TLMC_Move.restype = c_uint16
+def _dotnet_dir() -> str:
+    env = os.environ.get("OPTICS_THORLABS_DOTNET_DIR", "").strip()
+    if env:
+        return env.rstrip("\\/")
+    d = _DEFAULT_THORLABS_XA_DOTNET_DIR
+    if os.path.isfile(os.path.join(d, THORLABS_XA_MANAGED_DLL)):
+        return d
+    return ""
 
 
-def relative_move_mm(dll: ctypes.WinDLL, handle: int, delta_mm: float) -> bool:
-    """
-    One TLMC_Move in relative mode: convert |delta_mm| mm to device units, apply sign, move.
-    """
-    sign = 1 if delta_mm >= 0 else -1
-    du = c_int64(0)
-    if (
-        dll.TLMC_ConvertFromPhysicalToDevice(
-            handle,
-            TLMC_ScaleType_Distance,
-            TLMC_Unit_Millimetres,
-            ctypes.c_double(abs(delta_mm)),
-            byref(du),
+def _load_xa() -> Any:
+    d = _dotnet_dir()
+    if not d:
+        raise FileNotFoundError(
+            f"Set OPTICS_THORLABS_DOTNET_DIR to the folder containing {THORLABS_XA_MANAGED_DLL} "
+            r"(default: XA SDK '.NET Framework (C#)\Libraries\x64')."
         )
-        != TLMC_Success
-    ):
-        print("TLMC_ConvertFromPhysicalToDevice failed.", file=sys.stderr)
-        return False
+    path = os.path.join(d, THORLABS_XA_MANAGED_DLL)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Not found: {path}")
+    import clr  # type: ignore[import-not-found]
 
-    steps = int(du.value) * sign
+    if sys.platform == "win32":
+        os.add_dll_directory(os.path.dirname(os.path.abspath(path)))
+    clr.AddReference(path)
+    import Thorlabs.MotionControl.XA as xa  # type: ignore[import-not-found]
+
+    return xa
+
+
+def _iface(xa: Any, name: str) -> Any:
+    if hasattr(xa, name):
+        return getattr(xa, name)
+    df = importlib.import_module("Thorlabs.MotionControl.XA.DeviceFeatures")
+    return getattr(df, name)
+
+
+def _try_open_device(sm: Any, serial: str, xa: Any) -> Any:
+    """``TryOpenDevice`` only — if false, device unavailable (``Program.cs`` OpenOptionsExample)."""
+    om = xa.OperatingModes.Default
+    try:
+        result = sm.TryOpenDevice(serial, "", om, None)
+    except TypeError:
+        result = sm.TryOpenDevice(serial, "", om)
+    if isinstance(result, tuple):
+        if len(result) >= 2:
+            ok, dev = bool(result[0]), result[1]
+        else:
+            ok, dev = True, result[0]
+    else:
+        ok, dev = True, result
+    if not ok or dev is None:
+        raise RuntimeError(
+            f"TryOpenDevice returned false for serial {serial!r} (device unavailable). "
+            "See SDK Examples\\Program.cs GetDeviceListExample / OpenOptionsExample."
+        )
+    return dev
+
+
+def _close_device(xa: Any, device: Any) -> None:
+    disc = _cast(device, _iface(xa, "IDisconnect"))
+    if disc is not None:
+        try:
+            disc.Disconnect()
+        except Exception:
+            pass
+    try:
+        device.Close()
+    except Exception:
+        pass
+
+
+def _prepare_device(device: Any, xa: Any) -> None:
+    ILoadParams = _iface(xa, "ILoadParams")
+    IEnableState = _iface(xa, "IEnableState")
+    loadp = _cast(device, ILoadParams)
+    if loadp is None:
+        raise RuntimeError("ILoadParams not supported.")
+    loadp.LoadParams()
+    en = _cast(device, IEnableState)
+    if en is None:
+        raise RuntimeError("IEnableState not supported.")
+    en.SetEnableState(xa.EnableState.Enabled, xa.Timeout.Infinite)
+
+
+def _distance_unit_type(device: Any, xa: Any) -> Any:
+    """Match ``ExamplesUsingInterfaces.UnitConverter`` (use ``UnitType`` from ``FromDeviceUnitToPhysical``)."""
+    IUnitConverter = _iface(xa, "IUnitConverter")
+    IStatusItems = _iface(xa, "IStatusItems")
+    u = _cast(device, IUnitConverter)
+    items = _cast(device, IStatusItems)
+    if u is None or items is None:
+        raise RuntimeError("IUnitConverter or IStatusItems missing.")
+    si = items.GetStatusItem(xa.StatusItemId.Position)
+    if not si.IsInteger:
+        raise RuntimeError("Position status item is not integer-typed (see SDK GetStatus example).")
+    pos = int(si.GetInteger())
+    res = u.FromDeviceUnitToPhysical(xa.ScaleType.Distance, pos)
+    ut = getattr(res, "UnitType", None) or getattr(res, "unitType", None)
+    if ut is None:
+        raise RuntimeError("UnitConversionResult has no UnitType.")
+    return ut
+
+
+def relative_move_mm(device: Any, xa: Any, delta_mm: float, distance_ut: Any) -> bool:
+    """``MoveRelative`` + ``UnitConverter`` pattern from ``ExamplesUsingInterfaces``."""
+    IUnitConverter = _iface(xa, "IUnitConverter")
+    IMove = _iface(xa, "IMove")
+    u = _cast(device, IUnitConverter)
+    mv = _cast(device, IMove)
+    if u is None or mv is None:
+        print("IUnitConverter or IMove missing.", file=sys.stderr)
+        return False
+    sign = 1 if delta_mm >= 0 else -1
+    try:
+        steps = int(
+            u.FromPhysicalToDeviceUnit(
+                xa.ScaleType.Distance,
+                distance_ut,
+                float(abs(delta_mm)),
+            )
+        )
+    except Exception as e:
+        print(f"FromPhysicalToDeviceUnit failed: {e}", file=sys.stderr)
+        return False
+    steps *= sign
     if steps < -(2**31) or steps > 2**31 - 1:
-        print("Converted distance does not fit int32 for TLMC_Move.", file=sys.stderr)
+        print("Converted distance does not fit int32 for IMove.Move.", file=sys.stderr)
         return False
-
-    if (
-        dll.TLMC_Move(handle, TLMC_MoveMode_Relative, c_int32(steps), c_int64(TLMC_InfiniteWait))
-        != TLMC_Success
-    ):
-        print("TLMC_Move failed.", file=sys.stderr)
+    try:
+        mv.Move(xa.MoveMode.RelativeMove, steps, xa.Timeout.Infinite)
+    except Exception as e:
+        print(f"IMove.Move failed: {e}", file=sys.stderr)
         return False
     return True
 
 
-def run_single_motion(dll: ctypes.WinDLL, handle: int) -> bool:
-    """Single relative move by RELATIVE_MOVE_MM (same as the original one-shot script)."""
+def run_single_motion(device: Any, xa: Any, distance_ut: Any) -> bool:
     print(f"Single move: {RELATIVE_MOVE_MM} mm (relative).")
-    return relative_move_mm(dll, handle, RELATIVE_MOVE_MM)
+    return relative_move_mm(device, xa, RELATIVE_MOVE_MM, distance_ut)
 
 
 def oscillate_back_and_forth(
-    dll: ctypes.WinDLL,
-    handle: int,
+    device: Any,
+    xa: Any,
+    distance_ut: Any,
     *,
     amplitude_mm: float = OSCILLATION_AMPLITUDE_MM,
     cycles: int = OSCILLATION_CYCLES,
     pause_s: float = OSCILLATION_PAUSE_S,
 ) -> bool:
-    """
-    Each cycle: +amplitude_mm, then −amplitude_mm (one full back-and-forth).
-    `cycles` is the number of those oscillations (2 * cycles moves total).
-    """
     print(f"Oscillate: ±{amplitude_mm} mm, {cycles} cycle(s), pause {pause_s} s between half-strokes.")
-    for c in range(cycles):
-        if not relative_move_mm(dll, handle, amplitude_mm):
+    for _ in range(cycles):
+        if not relative_move_mm(device, xa, amplitude_mm, distance_ut):
             return False
         if pause_s > 0:
             time.sleep(pause_s)
-        if not relative_move_mm(dll, handle, -amplitude_mm):
+        if not relative_move_mm(device, xa, -amplitude_mm, distance_ut):
             return False
         if pause_s > 0:
             time.sleep(pause_s)
@@ -153,60 +214,42 @@ def oscillate_back_and_forth(
 
 
 def main() -> int:
+    if sys.platform != "win32":
+        print("This script requires Windows.", file=sys.stderr)
+        return 1
     try:
-        dll = _load_dll()
+        xa = _load_xa()
     except FileNotFoundError as e:
         print(e, file=sys.stderr)
         return 1
+    except ImportError as e:
+        print(f"pythonnet not available: {e}", file=sys.stderr)
+        return 1
 
-    _bind(dll)
-    handle = 0
-
+    sm = None
+    device = None
     try:
-        if dll.TLMC_Startup(None) != TLMC_Success:
-            print("TLMC_Startup failed.", file=sys.stderr)
-            return 1
-
-        h = c_uint32(0)
-        if (
-            dll.TLMC_Open(
-                DEVICE_SERIAL.encode("utf-8"),
-                None,
-                TLMC_OperatingMode_Default,
-                byref(h),
-            )
-            != TLMC_Success
-        ):
-            print(f"TLMC_Open failed (serial={DEVICE_SERIAL!r}).", file=sys.stderr)
-            return 1
-
-        handle = h.value
-
-        if dll.TLMC_LoadParams(handle) != TLMC_Success:
-            print("TLMC_LoadParams failed.", file=sys.stderr)
-            return 1
-
-        if (
-            dll.TLMC_SetEnableState(handle, TLMC_Enabled, c_int64(TLMC_InfiniteWait))
-            != TLMC_Success
-        ):
-            print("TLMC_SetEnableState(Enabled) failed.", file=sys.stderr)
-            return 1
-
-        # --- Swap which motion runs (comment one, uncomment the other) -----------------
-        ok = oscillate_back_and_forth(dll, handle, pause_s=0.5)
-        # ok = oscillate_back_and_forth(dll, handle)
-        # ok = run_single_motion(dll, handle)
-
+        sm = xa.SystemManager.Create()
+        sm.Startup()
+        device = _try_open_device(sm, DEVICE_SERIAL, xa)
+        _prepare_device(device, xa)
+        distance_ut = _distance_unit_type(device, xa)
+        ok = oscillate_back_and_forth(device, xa, distance_ut, pause_s=0.5)
         if not ok:
             return 1
-
         print("Done.")
         return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     finally:
-        if handle:
-            dll.TLMC_Close(handle)
-        dll.TLMC_Shutdown()
+        if device is not None:
+            _close_device(xa, device)
+        if sm is not None:
+            try:
+                sm.Shutdown()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
