@@ -68,7 +68,16 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
+
+# MCP tool hints (see ToolAnnotations in the MCP spec / mcp.types)
+_TOOL_HINTS_READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+_TOOL_HINTS_MOTION = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    openWorldHint=False,
+)
 
 try:
     from mcp_servers.dotnet_cast import cast_clr_iface
@@ -698,6 +707,7 @@ mcp = FastMCP(
 
 
 @mcp.tool(
+    annotations=_TOOL_HINTS_READ,
     description=(
         "Read the current tilt angles of a single mirror. "
         "Returns theta (vertical/pitch) and phi (horizontal/yaw) in millidegrees. "
@@ -716,6 +726,7 @@ def get_mirror_state(mirror_index: int) -> dict:
 
 
 @mcp.tool(
+    annotations=_TOOL_HINTS_READ,
     description=(
         "Read the current tilt angles of ALL mirrors in one call. "
         "Returns a list of {mirror_index, theta_mdeg, phi_mdeg} objects. "
@@ -735,6 +746,7 @@ def get_all_mirrors_state() -> List[dict]:
 
 
 @mcp.tool(
+    annotations=_TOOL_HINTS_MOTION,
     description=(
         "Set the absolute tilt angles of a single mirror. "
         "theta_mdeg is vertical/pitch, phi_mdeg is horizontal/yaw, both in millidegrees. "
@@ -768,6 +780,7 @@ class MirrorTarget(BaseModel):
 
 
 @mcp.tool(
+    annotations=_TOOL_HINTS_MOTION,
     description=(
         "Set the absolute tilt angles of ALL mirrors in a single call. "
         "Accepts a list of {mirror_index, theta_mdeg, phi_mdeg} objects. "
@@ -797,6 +810,7 @@ def set_all_mirrors_angles(
 
 
 @mcp.tool(
+    annotations=_TOOL_HINTS_MOTION,
     description=(
         "Apply a RELATIVE angular step to a single mirror. "
         "new_angle = current_angle + delta for both axes. "
@@ -852,6 +866,7 @@ class MirrorDelta(BaseModel):
 
 
 @mcp.tool(
+    annotations=_TOOL_HINTS_MOTION,
     description=(
         "Apply RELATIVE angular steps to ALL mirrors in a single call. "
         "For each mirror: new_angle = current_angle + delta. "
@@ -901,6 +916,7 @@ def step_all_mirrors_angles(
 
 
 @mcp.tool(
+    annotations=_TOOL_HINTS_READ,
     description=(
         "Query the safe hardware angle limits for a single mirror. "
         "Returns min and max allowed values for both theta and phi in millidegrees. "
@@ -923,6 +939,7 @@ def get_mirror_limits(mirror_index: int) -> dict:
 
 
 @mcp.tool(
+    annotations=_TOOL_HINTS_MOTION,
     description=(
         "Move a single mirror to its home position: theta=0, phi=0 mdeg. "
         "Use this to reset a mirror to a known neutral state before a new alignment run or after an error. "
@@ -937,6 +954,7 @@ def home_mirror(mirror_index: int, settle_ms: int = SETTLE_MS) -> dict:
 
 
 @mcp.tool(
+    annotations=_TOOL_HINTS_MOTION,
     description=(
         "Move ALL mirrors to their home position: theta=0, phi=0 mdeg. "
         "Use this at the start of a new experiment run or after an emergency stop "

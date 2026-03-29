@@ -1,6 +1,10 @@
 from typing import Any
+
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+
+_TOOL_HINTS_READONLY_NET = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
 # Initialize FastMCP server
 mcp = FastMCP("weather")
 # Constants
@@ -32,7 +36,7 @@ Description: {props.get('description', 'No description available')}
 Instructions: {props.get('instruction', 'No specific instructions provided')}
 """
 
-@mcp.tool()
+@mcp.tool(annotations=_TOOL_HINTS_READONLY_NET)
 async def get_alerts(state: str) -> str:
     """Get weather alerts for a US state.
     Args:
@@ -47,7 +51,7 @@ async def get_alerts(state: str) -> str:
     alerts = [format_alert(feature) for feature in data["features"]]
     return "\n---\n".join(alerts)
 
-@mcp.tool()
+@mcp.tool(annotations=_TOOL_HINTS_READONLY_NET)
 async def get_forecast(latitude: float, longitude: float) -> str:
     """Get weather forecast for a location.
     Args:
@@ -78,5 +82,4 @@ Forecast: {period['detailedForecast']}
     return "\n---\n".join(forecasts)
 
 if __name__ == "__main__":
-    # Initialize and run the server
-    mcp.run(transport='stdio')
+    mcp.run()
