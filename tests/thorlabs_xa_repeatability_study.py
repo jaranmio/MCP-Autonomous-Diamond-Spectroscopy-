@@ -57,7 +57,7 @@ except ImportError:
 DEVICE_SERIAL = "27272875"
 
 # Nominal positions in physical units for the device's distance scale (typically mm).
-TARGET_POSITIONS_MM: list[float] = [0.0, 1.0, 0.0, 2.0, 0.0]
+TARGET_POSITIONS_MM: list[float] = [0.0, 6.0, 0.0, -6.0, 0.0]
 
 # Full repeatability cycles: each cycle visits every target in order.
 NUM_CYCLES = 25
