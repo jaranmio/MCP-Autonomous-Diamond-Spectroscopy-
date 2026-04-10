@@ -55,6 +55,7 @@ Exposed tools (for LLM use):
   7. get_mirror_limits       - query the safe angle bounds for one mirror
   8. home_mirror             - move one mirror to its home position (0, 0)
   9. home_all_mirrors        - move all mirrors to home position (0, 0)
+ 10. sweep_mirror_full_range - sweep one mirror through the allowed theta/phi range (min→max setpoints, within safe bounds), starting from home (0, 0) each time
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -682,6 +683,37 @@ def _mirror_limits_from_hw(mirror_index: int) -> Optional[dict]:
     }
 
 
+def _mirror_bounds_mdeg(mirror_index: int) -> dict:
+    """
+    Theta/phi min and max in millidegrees for one mirror: from hardware when connected,
+    otherwise the configured THETA_/PHI_* safe constants (same source as get_mirror_limits).
+    """
+    lim = _mirror_limits_from_hw(mirror_index)
+    if lim is not None:
+        return lim
+    return {
+        "theta_min_mdeg": THETA_MIN,
+        "theta_max_mdeg": THETA_MAX,
+        "phi_min_mdeg": PHI_MIN,
+        "phi_max_mdeg": PHI_MAX,
+    }
+
+
+def _sweep_stops(lo: float, hi: float, step_mdeg: float) -> List[float]:
+    if step_mdeg <= 0:
+        raise ValueError(f"step_mdeg must be positive, got {step_mdeg}.")
+    if hi < lo:
+        lo, hi = hi, lo
+    stops: List[float] = [lo]
+    cur = lo + step_mdeg
+    while cur < hi:
+        stops.append(cur)
+        cur += step_mdeg
+    if stops[-1] != hi:
+        stops.append(hi)
+    return stops
+
+
 # ---------------------------------------------------------------------------
 # MCP server
 # ---------------------------------------------------------------------------
@@ -697,6 +729,7 @@ mcp = FastMCP(
         "Use step_mirror_angle or step_all_mirrors_angles for relative moves. "
         "Always call get_mirror_limits before large moves to avoid hitting hardware bounds. "
         "Call home_mirror or home_all_mirrors to reset to (0, 0). "
+        "Use sweep_mirror_full_range to step through the full allowed travel (min to max per get_mirror_limits) from home (0,0) each time — setpoints stay within those bounds. "
         "Hardware: default is one mm axis (theta) per mirror; set env OPTICS_XA_SERIALS to "
         "NUM_MIRRORS serials or 2×NUM_MIRRORS (theta,phi per mirror). "
         "Use OPTICS_SIMULATE=1 or clear OPTICS_XA_SERIALS for offline testing. "
@@ -926,16 +959,7 @@ def step_all_mirrors_angles(
 )
 def get_mirror_limits(mirror_index: int) -> dict:
     _validate_mirror_index(mirror_index)
-    lim = _mirror_limits_from_hw(mirror_index)
-    if lim is not None:
-        return {"mirror_index": mirror_index, **lim}
-    return {
-        "mirror_index": mirror_index,
-        "theta_min_mdeg": THETA_MIN,
-        "theta_max_mdeg": THETA_MAX,
-        "phi_min_mdeg": PHI_MIN,
-        "phi_max_mdeg": PHI_MAX,
-    }
+    return {"mirror_index": mirror_index, **_mirror_bounds_mdeg(mirror_index)}
 
 
 @mcp.tool(
@@ -969,6 +993,62 @@ def home_all_mirrors(settle_ms: int = SETTLE_MS) -> List[dict]:
         _move_mirror(i, 0.0, 0.0, settle_ms)
         results.append({"mirror_index": i, "theta_mdeg": 0.0, "phi_mdeg": 0.0})
     return results
+
+
+@mcp.tool(
+    annotations=_TOOL_HINTS_MOTION,
+    description=(
+        "Sweep one mirror through its full safe angular range along theta and/or phi: setpoints run from "
+        "each axis minimum to maximum (inclusive), using the same bound values as get_mirror_limits — "
+        "commands do not go past those limits. "
+        f"mirror_index is 0-based (0 to {NUM_MIRRORS - 1}). "
+        "`step_mdeg` is the spacing between setpoints along each axis in mdeg (must be > 0). "
+        f"`settle_ms` waits after each absolute move (default {SETTLE_MS} ms). "
+        "`axes`: 'theta' — sweep theta only, phi held at 0; 'phi' — sweep phi only, theta held at 0; "
+        "'both' — full theta sweep (phi held at 0), then full phi sweep (theta held at 0)."
+    ),
+)
+def sweep_mirror_full_range(
+    mirror_index: int,
+    step_mdeg: float = 250.0,
+    settle_ms: int = SETTLE_MS,
+    axes: Literal["theta", "phi", "both"] = "theta",
+) -> dict:
+    _validate_mirror_index(mirror_index)
+    lim = _mirror_bounds_mdeg(mirror_index)
+
+    theta_stops: List[float] = []
+    phi_stops: List[float] = []
+    move_count = 1
+
+    if axes in ("theta", "both"):
+        theta_stops = _sweep_stops(lim["theta_min_mdeg"], lim["theta_max_mdeg"], step_mdeg)
+        for t in theta_stops:
+            _move_mirror(mirror_index, t, 0.0, settle_ms)
+            move_count += 1
+
+    if axes in ("phi", "both"):
+        phi_stops = _sweep_stops(lim["phi_min_mdeg"], lim["phi_max_mdeg"], step_mdeg)
+        for p in phi_stops:
+            _move_mirror(mirror_index, 0.0, p, settle_ms)
+            move_count += 1
+
+    final = _read_mirror(mirror_index)
+    return {
+        "mirror_index": mirror_index,
+        "axes": axes,
+        "step_mdeg": step_mdeg,
+        "settle_ms": settle_ms,
+        "theta_min_mdeg": lim["theta_min_mdeg"],
+        "theta_max_mdeg": lim["theta_max_mdeg"],
+        "phi_min_mdeg": lim["phi_min_mdeg"],
+        "phi_max_mdeg": lim["phi_max_mdeg"],
+        "theta_stop_count": len(theta_stops),
+        "phi_stop_count": len(phi_stops),
+        "total_move_commands": move_count,
+        "final_theta_mdeg": final["theta"],
+        "final_phi_mdeg": final["phi"],
+    }
 
 
 if __name__ == "__main__":
