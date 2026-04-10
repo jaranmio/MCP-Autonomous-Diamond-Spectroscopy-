@@ -21,7 +21,7 @@ from pathlib import Path
 try:
     from mcp_servers import optics_server as opt
 except ImportError:
-    _ROOT = Path(__file__).resolve().parent
+    _ROOT = Path(__file__).resolve().parent.parent
     if str(_ROOT) not in sys.path:
         sys.path.insert(0, str(_ROOT))
     from mcp_servers import optics_server as opt

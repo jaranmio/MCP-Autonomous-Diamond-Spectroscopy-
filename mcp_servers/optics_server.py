@@ -55,7 +55,7 @@ Exposed tools (for LLM use):
   7. get_mirror_limits       - query the safe angle bounds for one mirror
   8. home_mirror             - move one mirror to its home position (0, 0)
   9. home_all_mirrors        - move all mirrors to home position (0, 0)
- 10. sweep_mirror_full_range - sweep one mirror through the allowed theta/phi range (min→max setpoints, within safe bounds), starting from home (0, 0) each time
+ 10. sweep_mirror - sweep one mirror through the allowed theta/phi range (min→max setpoints, within safe bounds), starting from home (0, 0) each time
 """
 
 from __future__ import annotations
@@ -729,7 +729,7 @@ mcp = FastMCP(
         "Use step_mirror_angle or step_all_mirrors_angles for relative moves. "
         "Always call get_mirror_limits before large moves to avoid hitting hardware bounds. "
         "Call home_mirror or home_all_mirrors to reset to (0, 0). "
-        "Use sweep_mirror_full_range to step through the full allowed travel (min to max per get_mirror_limits) from home (0,0) each time — setpoints stay within those bounds. "
+        "Use sweep_mirror to step through the full allowed travel (min to max per get_mirror_limits) from home (0,0) each time — setpoints stay within those bounds. "
         "Hardware: default is one mm axis (theta) per mirror; set env OPTICS_XA_SERIALS to "
         "NUM_MIRRORS serials or 2×NUM_MIRRORS (theta,phi per mirror). "
         "Use OPTICS_SIMULATE=1 or clear OPTICS_XA_SERIALS for offline testing. "
@@ -1008,7 +1008,7 @@ def home_all_mirrors(settle_ms: int = SETTLE_MS) -> List[dict]:
         "'both' — full theta sweep (phi held at 0), then full phi sweep (theta held at 0)."
     ),
 )
-def sweep_mirror_full_range(
+def sweep_mirror(
     mirror_index: int,
     step_mdeg: float = 250.0,
     settle_ms: int = SETTLE_MS,
