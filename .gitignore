@@ -3,3 +3,4 @@ __pycache__/
 .cursor/
 .DS_Store
 .claude/
+temp_notes.txt
