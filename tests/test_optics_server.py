@@ -311,14 +311,14 @@ class TestValidation(unittest.TestCase):
     def test_validate_angles_theta_bounds(self) -> None:
         o = self.o
         with self.assertRaises(ValueError):
-            o._validate_angles(o.THETA_MIN - 1.0, 0.0)
+            o._validate_angles(0, o.THETA_MIN - 1.0, 0.0)
         with self.assertRaises(ValueError):
-            o._validate_angles(o.THETA_MAX + 1.0, 0.0)
+            o._validate_angles(0, o.THETA_MAX + 1.0, 0.0)
 
     def test_validate_angles_phi_bounds(self) -> None:
         o = self.o
         with self.assertRaises(ValueError):
-            o._validate_angles(0.0, o.PHI_MIN - 1.0)
+            o._validate_angles(0, 0.0, o.PHI_MIN - 1.0)
 
 
 class TestSimulationMcpTools(unittest.TestCase):

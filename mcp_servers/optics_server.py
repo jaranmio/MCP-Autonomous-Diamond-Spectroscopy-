@@ -18,7 +18,8 @@ with assemblies loaded from ``SDK\\.NET Framework (C#)\\Libraries\\x64``:
 ``IEnableState.SetEnableState(Enabled, Timeout.Infinite)``, ``IUnitConverter`` distance
 conversion, ``IMove.Move`` (``MoveMode.Absolute`` / ``MoveMode.RelativeMove``),
 ``IStatusItems.GetStatusItem(StatusItemId.Position)``, ``IConnectedProduct.GetConnectedProductInfo``
-for travel limits. Requires a 64-bit Windows Python and the Thorlabs .NET assemblies from the
+for travel limits, and ``IHome.Home`` for controller-native homing (see ``home_mirror`` tools).
+Requires a 64-bit Windows Python and the Thorlabs .NET assemblies from the
 XA SDK (see ``OPTICS_THORLABS_DOTNET_DIR``).
 
 Configuration: all knobs are read once at import into ``settings`` (:class:`OpticsSettings`).
@@ -53,15 +54,16 @@ Exposed tools (for LLM use):
   5. step_mirror_angle       - apply a relative delta to one mirror
   6. step_all_mirrors_angles - apply relative deltas to every mirror at once
   7. get_mirror_limits       - query the safe angle bounds for one mirror
-  8. home_mirror             - move one mirror to its home position (0, 0)
-  9. home_all_mirrors        - move all mirrors to home position (0, 0)
- 10. sweep_mirror - sweep one mirror through the allowed theta/phi range (min→max setpoints, within safe bounds), starting from home (0, 0) each time
+  8. home_mirror             - native IHome homing for one mirror (readback mdeg); sim uses (0,0)
+  9. home_all_mirrors        - native IHome homing for every mirror; sim uses (0,0)
+ 10. sweep_mirror - sweep through allowed theta/phi range; starts from current position after optional home
 """
 
 from __future__ import annotations
 
 import atexit
 import os
+import signal
 import sys
 import threading
 import time
@@ -104,6 +106,7 @@ SETTLE_MS = 200
 
 DEFAULT_OPTICS_XA_SERIALS = "27272875"
 
+# Fallback bounds when hardware limits are unavailable (simulation, missing XA, or software-only axis).
 THETA_MIN = -5_000.0
 THETA_MAX = 5_000.0
 PHI_MIN = -5_000.0
@@ -305,6 +308,7 @@ class _ThorlabsXAOptics:
         self._IStatusItems = _xa_iface(xa, "IStatusItems")
         self._IUnitConverter = _xa_iface(xa, "IUnitConverter")
         self._IConnectedProduct = _xa_iface(xa, "IConnectedProduct")
+        self._IHome = _xa_iface(xa, "IHome")
         self._IDisconnect = _xa_iface(xa, "IDisconnect")
 
     @staticmethod
@@ -358,6 +362,15 @@ class _ThorlabsXAOptics:
         except Exception:
             pass
         self._distance_unit_by_device.pop(id(device), None)
+
+    def _native_home_device(self, device: Any) -> None:
+        """SDK ``ExamplesUsingInterfaces.Home``: ``IHome.Home(Timeout.Infinite)`` until homing completes."""
+        ihome = cast_clr_iface(device, self._IHome)
+        if ihome is None:
+            raise RuntimeError(
+                "IHome is not available on this device; native homing is not supported by the firmware/interface."
+            )
+        ihome.Home(self._Timeout.Infinite)
 
     def _converter_distance_unit_type(self, device: Any) -> Any:
         """
@@ -564,6 +577,50 @@ _mirror_states: List[dict] = [{"theta": 0.0, "phi": 0.0} for _ in range(NUM_MIRR
 _hw: Optional[_ThorlabsXAOptics] = None
 _hw_init_error: Optional[str] = None
 _backend_lock = threading.Lock()
+_xa_cleanup_registered = False
+
+
+def _release_thorlabs_hw() -> None:
+    """
+    Disconnect XA devices and drop global handles. Safe to call multiple times (exit, signals, MCP stop).
+    Close runs outside the backend lock so a slow .NET shutdown does not block other code indefinitely.
+    """
+    global _hw, _hw_init_error
+    with _backend_lock:
+        h = _hw
+        _hw = None
+        _hw_init_error = None
+    if h is not None:
+        try:
+            h.close()
+        except Exception:
+            pass
+
+
+def _register_xa_cleanup() -> None:
+    global _xa_cleanup_registered
+    if _xa_cleanup_registered:
+        return
+    _xa_cleanup_registered = True
+    atexit.register(_release_thorlabs_hw)
+
+
+def _install_exit_signals() -> None:
+    """Best-effort release on Ctrl+C / SIGTERM so the controller is not left reserved."""
+
+    def _on_signal(_signum: int, _frame: Any) -> None:
+        _release_thorlabs_hw()
+        raise SystemExit(128 + (_signum & 0x7F))
+
+    try:
+        signal.signal(signal.SIGINT, _on_signal)
+    except (AttributeError, ValueError):
+        pass
+    if hasattr(signal, "SIGTERM"):
+        try:
+            signal.signal(signal.SIGTERM, _on_signal)
+        except (AttributeError, ValueError):
+            pass
 
 
 def _use_simulation() -> bool:
@@ -592,13 +649,7 @@ def _get_hw() -> Optional[_ThorlabsXAOptics]:
             dev = _ThorlabsXAOptics(serials)
             dev.connect()
             _hw = dev
-
-            def _shutdown_xa_dotnet() -> None:
-                h = _hw
-                if h is not None:
-                    h.close()
-
-            atexit.register(_shutdown_xa_dotnet)
+            _register_xa_cleanup()
             return _hw
         except Exception as e:
             _hw_init_error = str(e)
@@ -613,14 +664,19 @@ def _validate_mirror_index(mirror_index: int) -> None:
         )
 
 
-def _validate_angles(theta: float, phi: float) -> None:
-    if not (THETA_MIN <= theta <= THETA_MAX):
+def _validate_angles(mirror_index: int, theta: float, phi: float) -> None:
+    """Enforce per-mirror bounds: hardware from ``_mirror_bounds_mdeg``, else THETA_/PHI_* fallbacks."""
+    _validate_mirror_index(mirror_index)
+    b = _mirror_bounds_mdeg(mirror_index)
+    t_lo, t_hi = b["theta_min_mdeg"], b["theta_max_mdeg"]
+    p_lo, p_hi = b["phi_min_mdeg"], b["phi_max_mdeg"]
+    if not (t_lo <= theta <= t_hi):
         raise ValueError(
-            f"theta={theta} mdeg is outside safe limits [{THETA_MIN}, {THETA_MAX}] mdeg."
+            f"theta={theta} mdeg is outside allowed range [{t_lo}, {t_hi}] mdeg for mirror {mirror_index}."
         )
-    if not (PHI_MIN <= phi <= PHI_MAX):
+    if not (p_lo <= phi <= p_hi):
         raise ValueError(
-            f"phi={phi} mdeg is outside safe limits [{PHI_MIN}, {PHI_MAX}] mdeg."
+            f"phi={phi} mdeg is outside allowed range [{p_lo}, {p_hi}] mdeg for mirror {mirror_index}."
         )
 
 
@@ -714,6 +770,42 @@ def _sweep_stops(lo: float, hi: float, step_mdeg: float) -> List[float]:
     return stops
 
 
+def _home_mirror_native(mirror_index: int, settle_ms: int) -> dict:
+    """
+    Hardware: ``IHome.Home`` per real axis (SDK), then sync mirror state from readback.
+    Simulation: move to (0, 0) mdeg in software as before.
+    """
+    _validate_mirror_index(mirror_index)
+    hw = _get_hw()
+    if hw is None:
+        if not _use_simulation() and _hw_init_error:
+            raise RuntimeError(f"Thorlabs XA not available: {_hw_init_error}")
+        _move_mirror(mirror_index, 0.0, 0.0, settle_ms)
+        st = _read_mirror(mirror_index)
+        return {"mirror_index": mirror_index, "theta_mdeg": st["theta"], "phi_mdeg": st["phi"]}
+
+    with hw._lock:
+        t_ax = _axis_theta(mirror_index)
+        dev_t = hw._handle_per_axis[t_ax]
+        if dev_t is None:
+            raise RuntimeError("home_mirror: theta axis has no hardware device.")
+        hw._native_home_device(dev_t)
+        if hw._layout == "full":
+            p_ax = _axis_phi(mirror_index)
+            dev_p = hw._handle_per_axis[p_ax]
+            if dev_p is None:
+                raise RuntimeError("home_mirror: phi axis has no hardware device.")
+            hw._native_home_device(dev_p)
+        else:
+            _mirror_states[mirror_index]["phi"] = 0.0
+        _mirror_states[mirror_index]["theta"] = hw.read_axis_mdeg(t_ax)
+        if hw._layout == "full":
+            _mirror_states[mirror_index]["phi"] = hw.read_axis_mdeg(_axis_phi(mirror_index))
+    time.sleep(settle_ms / 1000.0)
+    st = _read_mirror(mirror_index)
+    return {"mirror_index": mirror_index, "theta_mdeg": st["theta"], "phi_mdeg": st["phi"]}
+
+
 # ---------------------------------------------------------------------------
 # MCP server
 # ---------------------------------------------------------------------------
@@ -727,9 +819,11 @@ mcp = FastMCP(
         "Use get_mirror_state or get_all_mirrors_state to read positions before making moves. "
         "Use set_mirror_angle or set_all_mirrors_angles for absolute moves. "
         "Use step_mirror_angle or step_all_mirrors_angles for relative moves. "
-        "Always call get_mirror_limits before large moves to avoid hitting hardware bounds. "
-        "Call home_mirror or home_all_mirrors to reset to (0, 0). "
-        "Use sweep_mirror to step through the full allowed travel (min to max per get_mirror_limits) from home (0,0) each time — setpoints stay within those bounds. "
+        "Always call get_mirror_limits before large moves: it returns controller limits when hardware is connected, "
+        "and only falls back to internal constants when simulating or offline. "
+        "Call home_mirror or home_all_mirrors to run native controller homing (IHome) when hardware is connected; "
+        "simulation still resets to (0,0) mdeg. "
+        "Use sweep_mirror to step through the full allowed travel (min to max per get_mirror_limits); call home_mirror first if you need a repeatable start. "
         "Hardware: default is one mm axis (theta) per mirror; set env OPTICS_XA_SERIALS to "
         "NUM_MIRRORS serials or 2×NUM_MIRRORS (theta,phi per mirror). "
         "Use OPTICS_SIMULATE=1 or clear OPTICS_XA_SERIALS for offline testing. "
@@ -783,10 +877,11 @@ def get_all_mirrors_state() -> List[dict]:
     description=(
         "Set the absolute tilt angles of a single mirror. "
         "theta_mdeg is vertical/pitch, phi_mdeg is horizontal/yaw, both in millidegrees. "
-        f"Safe range for both: [{THETA_MIN}, {THETA_MAX}] mdeg. "
+        "Each axis must stay within that mirror's allowed range (from get_mirror_limits when hardware is connected; "
+        "otherwise internal fallback bounds). "
         f"mirror_index is 0-based integer between 0 and {NUM_MIRRORS - 1}. "
         f"settle_ms is how long to wait for mechanical settling after the move (default {SETTLE_MS} ms). "
-        "Raises an error if angles exceed hardware limits — call get_mirror_limits first if unsure."
+        "Raises an error if angles exceed those limits — call get_mirror_limits first if unsure."
     )
 )
 def set_mirror_angle(
@@ -795,8 +890,7 @@ def set_mirror_angle(
     phi_mdeg: float,
     settle_ms: int = SETTLE_MS,
 ) -> dict:
-    _validate_mirror_index(mirror_index)
-    _validate_angles(theta_mdeg, phi_mdeg)
+    _validate_angles(mirror_index, theta_mdeg, phi_mdeg)
     _move_mirror(mirror_index, theta_mdeg, phi_mdeg, settle_ms)
     return {
         "mirror_index": mirror_index,
@@ -820,7 +914,7 @@ class MirrorTarget(BaseModel):
         "Mirrors are moved sequentially in the order provided. "
         "Use this instead of calling set_mirror_angle in a loop to reduce round-trip latency. "
         f"settle_ms is applied after each individual mirror move (default {SETTLE_MS} ms). "
-        "Raises an error if any angle exceeds hardware limits."
+        "Raises an error if any angle exceeds that mirror's allowed range (see get_mirror_limits)."
     )
 )
 def set_all_mirrors_angles(
@@ -829,8 +923,7 @@ def set_all_mirrors_angles(
 ) -> List[dict]:
     results = []
     for t in targets:
-        _validate_mirror_index(t.mirror_index)
-        _validate_angles(t.theta_mdeg, t.phi_mdeg)
+        _validate_angles(t.mirror_index, t.theta_mdeg, t.phi_mdeg)
         _move_mirror(t.mirror_index, t.theta_mdeg, t.phi_mdeg, settle_ms)
         results.append(
             {
@@ -853,7 +946,7 @@ def set_all_mirrors_angles(
         "because you only specify how much to move, not the absolute target. "
         f"mirror_index is 0-based integer between 0 and {NUM_MIRRORS - 1}. "
         f"settle_ms is wait time after the move (default {SETTLE_MS} ms). "
-        "Raises an error if the resulting angle would exceed hardware limits."
+        "Raises an error if the resulting angle would exceed that mirror's allowed range (see get_mirror_limits)."
     )
 )
 def step_mirror_angle(
@@ -866,7 +959,7 @@ def step_mirror_angle(
     current = _read_mirror(mirror_index)
     new_theta = current["theta"] + delta_theta_mdeg
     new_phi = current["phi"] + delta_phi_mdeg
-    _validate_angles(new_theta, new_phi)
+    _validate_angles(mirror_index, new_theta, new_phi)
     hw = _get_hw()
     if hw is None:
         if not _use_simulation() and _hw_init_error:
@@ -906,7 +999,7 @@ class MirrorDelta(BaseModel):
         "Accepts a list of {mirror_index, delta_theta_mdeg, delta_phi_mdeg} objects. "
         "Use this during iterative closed-loop alignment to nudge every mirror simultaneously. "
         f"settle_ms is applied after each individual mirror move (default {SETTLE_MS} ms). "
-        "Raises an error if any resulting angle would exceed hardware limits."
+        "Raises an error if any resulting angle would exceed that mirror's allowed range (see get_mirror_limits)."
     )
 )
 def step_all_mirrors_angles(
@@ -919,7 +1012,7 @@ def step_all_mirrors_angles(
         current = _read_mirror(d.mirror_index)
         new_theta = current["theta"] + d.delta_theta_mdeg
         new_phi = current["phi"] + d.delta_phi_mdeg
-        _validate_angles(new_theta, new_phi)
+        _validate_angles(d.mirror_index, new_theta, new_phi)
         hw = _get_hw()
         if hw is None:
             if not _use_simulation() and _hw_init_error:
@@ -951,9 +1044,10 @@ def step_all_mirrors_angles(
 @mcp.tool(
     annotations=_TOOL_HINTS_READ,
     description=(
-        "Query the safe hardware angle limits for a single mirror. "
-        "Returns min and max allowed values for both theta and phi in millidegrees. "
-        "Always call this before large absolute moves to avoid hardware errors. "
+        "Query the safe angle limits for a single mirror. "
+        "Returns min and max allowed values for both theta and phi in millidegrees (from the controller when connected; "
+        "otherwise fallback constants used for simulation). "
+        "Always call this before large absolute moves. "
         f"mirror_index is 0-based integer between 0 and {NUM_MIRRORS - 1}."
     )
 )
@@ -965,34 +1059,29 @@ def get_mirror_limits(mirror_index: int) -> dict:
 @mcp.tool(
     annotations=_TOOL_HINTS_MOTION,
     description=(
-        "Move a single mirror to its home position: theta=0, phi=0 mdeg. "
-        "Use this to reset a mirror to a known neutral state before a new alignment run or after an error. "
+        "Run the Thorlabs controller native homing sequence (IHome.Home) for each real axis on this mirror, "
+        "then return actual theta/phi in mdeg from readback. "
+        "This is not the same as commanding position 0: the drive defines home via limits/reference (configure in Kinesis if needed). "
+        "Theta-only benches home the hardware theta axis and set software phi to 0. "
+        "In simulation (OPTICS_SIMULATE=1), resets stored angles to (0, 0) mdeg. "
         f"mirror_index is 0-based integer between 0 and {NUM_MIRRORS - 1}. "
-        f"settle_ms is wait time after the move (default {SETTLE_MS} ms)."
+        f"settle_ms is wait time after homing completes (default {SETTLE_MS} ms)."
     )
 )
 def home_mirror(mirror_index: int, settle_ms: int = SETTLE_MS) -> dict:
-    _validate_mirror_index(mirror_index)
-    _move_mirror(mirror_index, 0.0, 0.0, settle_ms)
-    return {"mirror_index": mirror_index, "theta_mdeg": 0.0, "phi_mdeg": 0.0}
+    return _home_mirror_native(mirror_index, settle_ms)
 
 
 @mcp.tool(
     annotations=_TOOL_HINTS_MOTION,
     description=(
-        "Move ALL mirrors to their home position: theta=0, phi=0 mdeg. "
-        "Use this at the start of a new experiment run or after an emergency stop "
-        "to return the full optical path to a known neutral state. "
-        "Equivalent to calling home_mirror for every mirror in sequence. "
-        f"settle_ms is applied after each mirror move (default {SETTLE_MS} ms)."
+        "Run native controller homing (IHome) for every mirror, same semantics as home_mirror. "
+        "Use, for example, after an emergency stop so each axis hits its hardware-defined home. "
+        f"settle_ms is applied after each mirror's homing sequence (default {SETTLE_MS} ms)."
     )
 )
 def home_all_mirrors(settle_ms: int = SETTLE_MS) -> List[dict]:
-    results = []
-    for i in range(NUM_MIRRORS):
-        _move_mirror(i, 0.0, 0.0, settle_ms)
-        results.append({"mirror_index": i, "theta_mdeg": 0.0, "phi_mdeg": 0.0})
-    return results
+    return [_home_mirror_native(i, settle_ms) for i in range(NUM_MIRRORS)]
 
 
 @mcp.tool(
@@ -1052,4 +1141,9 @@ def sweep_mirror(
 
 
 if __name__ == "__main__":
-    mcp.run()
+    _register_xa_cleanup()
+    _install_exit_signals()
+    try:
+        mcp.run()
+    finally:
+        _release_thorlabs_hw()
