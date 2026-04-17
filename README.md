@@ -24,6 +24,7 @@ This project explores how a unified software interface can orchestrate the entir
   - Optical component configuration
   - Spectrometer operation
   - Camera-based detection
+  - Power meter monitoring
 
 - **Experiment Orchestration**
   - Automated measurement sequencing
@@ -61,4 +62,3 @@ This architecture enables modular integration of new hardware and supports scala
 ## Expected Outcome
 
 The final prototype will demonstrate a **fully autonomous spectroscopy measurement run**, serving as a proof-of-concept for automation in experimental quantum optics workflows.
-
