@@ -181,9 +181,21 @@ class SurrogateBundle:
             [self.norm.outputs_max], device=self.device, dtype=torch.float32
         )
 
-    def predict_efficiency_batch(self, state_9: np.ndarray) -> np.ndarray:
+    def predict_efficiency_batch(
+        self,
+        state_9: np.ndarray,
+        input_power_scale: float = 1.0,
+    ) -> np.ndarray:
         """
-        state_9: shape (N, 9) physical inputs; returns η of shape (N,) after log unnormalization.
+        state_9: shape (N, 9) physical inputs; returns η * input_power_scale of shape (N,)
+        after log unnormalization.
+
+        input_power_scale mirrors the notebook's ``input_power`` regression parameter:
+        a dimensionless fitting coefficient (notebook optimizes it in [0, 10 000]) that
+        maps the surrogate's normalized output onto the magnitude of the photodiode /
+        sensor readings.  It is **not** a physical power value — it is fitted by minimizing
+        SSR between ``prediction * input_power`` and the measured voltage array.
+        Default 1.0 returns raw dimensionless η.
         """
         if state_9.ndim == 1:
             state_9 = state_9.reshape(1, -1)
@@ -201,11 +213,11 @@ class SurrogateBundle:
             np.array([self.norm.outputs_max], dtype=np.float64),
             scales=["log"],
         )
-        return eff.reshape(-1).astype(np.float64)
+        return (eff.reshape(-1) * input_power_scale).astype(np.float64)
 
-    def predict_efficiency(self, state_9: list[float]) -> float:
+    def predict_efficiency(self, state_9: list[float], input_power_scale: float = 1.0) -> float:
         arr = np.asarray(state_9, dtype=np.float64).reshape(1, 9)
-        return float(self.predict_efficiency_batch(arr)[0])
+        return float(self.predict_efficiency_batch(arr, input_power_scale=input_power_scale)[0])
 
     @staticmethod
     def load(
