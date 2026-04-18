@@ -27,6 +27,14 @@ The file "Update of Automated optical alignment using digital twins.ipynb" initi
 
 ---
 
+## Power meter and VISA
+
+Instrument I/O for the Thorlabs PM goes through **PyVISA**; the Python package depends on a **VISA implementation on the OS** (commonly **NI-VISA**) for USB/LAN discovery and sessions.  Install that vendor stack on the bench PC in addition to `uv sync`.
+
+**NI-VISA and Thorlabs Optical Power Monitor** do not always coexist cleanly: installing or reinstalling one can break the other.  After NI-VISA is in place, **do not** reinstall Thorlabs Optical Power Monitor as a troubleshooting step—it is a common way to end up with both broken.  Prefer a stable order of installation and minimal churn.
+
+---
+
 ## Quickstart
 
 ```bash

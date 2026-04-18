@@ -1,10 +1,14 @@
 """
 power_meter_server.py
 ---------------------
-MCP server for the Thorlabs PM101A optical power meter in the diamond spectroscopy setup.
+MCP server for a Thorlabs optical power meter (PM family) in the diamond spectroscopy setup.
 
-Communication is via SCPI over USB (USBTMC) using pyvisa.  All SCPI commands follow the
-PM101x programmer's reference (mtn013681-d04).
+Communication is via SCPI using PyVISA.  Command usage matches Thorlabs PM SCPI documentation.
+
+**Host setup:** PyVISA talks to instruments through a VISA implementation on the machine.  Install
+**NI-VISA** (or another IVI-compliant VISA runtime supported by your OS) so that PyVISA can
+enumerate resources and open USB/LAN sessions.  The Python package alone is not enough for
+hardware I/O without that backend.
 
 Configuration (environment variables, read once at import; restart the MCP process to apply
 changes):
@@ -22,10 +26,14 @@ Exposed tools (for LLM use):
   3. read_power_averaged      - software-averaged power reading: mean + std over N samples
   4. set_wavelength           - set operating wavelength for responsivity correction (nm)
   5. zero_power_meter         - dark/background subtraction (block the beam before calling!)
+
+Shutdown: close_power_meter() closes the VISA instrument and resource manager; it is also
+registered with atexit so the MCP process releases the device on normal exit.
 """
 
 from __future__ import annotations
 
+import atexit
 import os
 import time
 from dataclasses import dataclass
@@ -81,7 +89,7 @@ settings = PowerMeterSettings.from_env()
 # ---------------------------------------------------------------------------
 
 class _PowerMeterHW:
-    """Thin wrapper around a pyvisa resource for the PM101A.
+    """Thin wrapper around a pyvisa resource for a Thorlabs PM.
 
     query() sends a SCPI command and returns the stripped response string.
     write() sends a SCPI command with no response expected.
@@ -122,7 +130,7 @@ class _SimulatedPowerMeter:
     def query(self, cmd: str) -> str:
         cmd_upper = cmd.strip().upper()
         if cmd_upper == "*IDN?":
-            return "THORLABS,PM101A,SIM000001,1.0.0"
+            return "THORLABS,PM,SIM000001,1.0.0"
         if cmd_upper == "SENS:CORR:WAV?":
             return f"{self._wavelength_m:.6e}"
         if cmd_upper == "SENS:POW:DC:RANG:AUTO?":
@@ -167,11 +175,32 @@ class _SimulatedPowerMeter:
 
 _hw: Optional[_PowerMeterHW | _SimulatedPowerMeter] = None
 _hw_init_error: str = ""
+_rm: Optional[object] = None   # pyvisa.ResourceManager when using real VISA
+
+
+def close_power_meter() -> None:
+    """Close the instrument handle and VISA ResourceManager if they were opened.
+
+    Safe to call multiple times. Registered with atexit for process shutdown.
+    """
+    global _hw, _rm
+    if _hw is not None:
+        try:
+            _hw.close()
+        except Exception:
+            pass
+        _hw = None
+    if _rm is not None:
+        try:
+            _rm.close()
+        except Exception:
+            pass
+        _rm = None
 
 
 def _init_hw() -> None:
     """Attempt to open the VISA connection.  Sets module globals _hw / _hw_init_error."""
-    global _hw, _hw_init_error
+    global _hw, _hw_init_error, _rm
 
     if settings.simulate:
         _hw = _SimulatedPowerMeter()
@@ -181,11 +210,13 @@ def _init_hw() -> None:
         import pyvisa  # type: ignore
     except ImportError:
         _hw_init_error = (
-            "pyvisa not installed — run `uv add pyvisa pyvisa-py` or set PM_SIMULATE=1."
+            "pyvisa not installed — run `uv add pyvisa` (and install NI-VISA on the host); "
+            "or set PM_SIMULATE=1."
         )
         return
 
-    rm = pyvisa.ResourceManager()
+    _rm = pyvisa.ResourceManager()
+    rm = _rm
 
     address = settings.visa_address
     if not address:
@@ -210,8 +241,10 @@ def _init_hw() -> None:
             "No Thorlabs power meter found on any VISA resource. "
             "Set PM_VISA_ADDRESS or PM_SIMULATE=1."
         )
+        close_power_meter()
         return
 
+    inst: Optional[object] = None
     try:
         inst = rm.open_resource(address)
         inst.timeout = _DEFAULT_TIMEOUT_MS
@@ -220,13 +253,22 @@ def _init_hw() -> None:
         if "THORLABS" not in idn.upper():
             inst.close()
             _hw_init_error = f"Device at {address!r} does not identify as Thorlabs: {idn!r}"
+            close_power_meter()
             return
         _hw = _PowerMeterHW(inst)
+        inst = None
     except Exception as exc:
+        if inst is not None:
+            try:
+                inst.close()
+            except Exception:
+                pass
         _hw_init_error = f"Failed to open {address!r}: {exc}"
+        close_power_meter()
 
 
 _init_hw()
+atexit.register(close_power_meter)
 
 
 def _get_hw() -> _PowerMeterHW | _SimulatedPowerMeter:
@@ -250,7 +292,7 @@ def _is_simulating() -> bool:
 mcp = FastMCP(
     name="power_meter_server",
     instructions=(
-        "Controls the Thorlabs PM101A optical power meter in the diamond spectroscopy setup. "
+        "Controls a Thorlabs optical power meter (PM series) in the diamond spectroscopy setup. "
         "All power readings are in Watts (W) unless noted otherwise. "
         "Wavelength is always specified in nanometres (nm). "
         "Call get_power_meter_status first to confirm the meter is connected and correctly configured. "
@@ -380,7 +422,7 @@ def read_power_averaged(n_samples: int = 10, interval_ms: int = 100) -> dict:
     annotations=_TOOL_HINTS_CONFIG,
     description=(
         "Set the operating wavelength of the power meter for responsivity correction (in nm). "
-        "The PM101A applies a wavelength-dependent correction curve to convert raw photodiode "
+        "The meter applies a wavelength-dependent correction curve to convert raw photodiode "
         "current to optical power — this must match the actual laser wavelength for accurate "
         "readings. "
         "Always call this at the start of a calibration run before any sweeps or zero. "
@@ -448,4 +490,7 @@ def zero_power_meter() -> dict:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    mcp.run()
+    try:
+        mcp.run()
+    finally:
+        close_power_meter()

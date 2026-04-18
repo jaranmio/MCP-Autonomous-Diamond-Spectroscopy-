@@ -8,7 +8,7 @@ FastMCP **orchestration** layer for autonomous optical alignment: combines
 2. **Fiber-coupling surrogate** — ``FiberCouplingNet`` and normalization from
    ``surrogate-NN/Update of Automated optical alignment using digital twins.ipynb``,
    loaded from ``fiber_coupling_model.pth`` + ``normalisation_parameters.npz``.
-3. **Power meter** — in-process calls to ``power_meter_server`` (Thorlabs PM101A via VISA)
+3. **Power meter** — in-process calls to ``power_meter_server`` (Thorlabs PM via VISA / PyVISA)
    for ground-truth fiber coupling measurements used to validate surrogate predictions.
 
 **9-D surrogate state (physical NN input space, *before* linear normalization)**
@@ -207,7 +207,7 @@ mcp = FastMCP(
         "physical vector [m0_a0, m1_a0, m0_a1, m1_a1, δx, δy, δz, φx, φy], mirrors 0–1 map to "
         "NN indices (0,2) and (1,3), output η is fiber coupling efficiency after log-domain "
         "denormalization, millidegree↔NN-unit conversion uses explicit nn_*_to_mdeg scales; "
-        "(3) power_meter_server — Thorlabs PM101A provides ground-truth power readings in Watts "
+        "(3) power_meter_server — Thorlabs PM provides ground-truth power readings in Watts "
         "to validate surrogate predictions. "
         "Recommended session sequence: pm_setup (set wavelength + zero with beam blocked) → "
         "compare_surrogate_to_measurement (assess twin accuracy) → alignment_closed_loop_step "
