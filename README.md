@@ -47,7 +47,7 @@ This project explores how a unified software interface can orchestrate the entir
 
 The optical power meter is controlled through **PyVISA** (see `pyproject.toml`).  For real hardware access, the host also needs a **VISA runtime**—typically **NI-VISA** on Windows—installed separately from Python.  PyVISA uses that stack to list resources (USB, LAN, etc.) and open instrument sessions.  Without it, use `PM_SIMULATE=1` for an in-process stub.  Set `PM_VISA_ADDRESS` when auto-detection is not appropriate.
 
-**NI-VISA vs Thorlabs Optical Power Monitor:** These stacks can **interfere** with each other—installing or reinstalling one may break the other.  If you install NI-VISA for PyVISA, avoid reinstalling Thorlabs Optical Power Monitor afterward to “fix” a broken setup; that cycle often makes things worse.  Plan install order and changes carefully on shared bench PCs.
+**NI-VISA vs Thorlabs Optical Power Monitor:** These stacks can **interfere** with each other—installing or reinstalling one may break the other.  If you install NI-VISA for PyVISA, avoid reinstalling Thorlabs Optical Power Monitor afterward to “fix” a broken setup
 
 ---
 
