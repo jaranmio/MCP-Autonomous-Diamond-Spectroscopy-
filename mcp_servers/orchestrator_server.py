@@ -38,7 +38,7 @@ Environment (read once at import; restart process to apply)
     Directory containing ``fiber_coupling_model.pth`` and
     ``normalisation_parameters.npz``. Default: ``<repo>/surrogate-NN/NN_parameter_data``.
 ``ORCH_DEFAULT_NN_THETA_TO_MDEG``, ``ORCH_DEFAULT_NN_PHI_TO_MDEG``
-    Default scale factors for tools that move optics (default ``1.0`` — **placeholder**).
+    Default scale factors for tools that move optics (default ``1000.0``).
 
 Optics uses existing ``OPTICS_*`` variables (see ``optics_server`` docstring).
 
@@ -49,6 +49,7 @@ Run (stdio MCP)::
 with ``mcp_servers`` on ``sys.path`` (e.g. cwd = ``mcp_servers``, or pass the absolute path
 to this file as the script argument).
 """
+
 
 from __future__ import annotations
 
@@ -95,8 +96,10 @@ def _resolve_surrogate_dir() -> Path:
 
 
 _SURROGATE_DIR = _resolve_surrogate_dir()
-_DEFAULT_NN_THETA_TO_MDEG = _env_float("ORCH_DEFAULT_NN_THETA_TO_MDEG", 1.0)
-_DEFAULT_NN_PHI_TO_MDEG = _env_float("ORCH_DEFAULT_NN_PHI_TO_MDEG", 1.0)
+_DEFAULT_NN_THETA_TO_MDEG = _env_float("ORCH_DEFAULT_NN_THETA_TO_MDEG", 1000.0)
+# assuming NN angles are in Zemax-like units (degrees), this default corresponds to 1000 mdeg = 1 NN angle unit (e.g. 1 mdeg = 0.001 radian)
+_DEFAULT_NN_PHI_TO_MDEG = _env_float("ORCH_DEFAULT_NN_PHI_TO_MDEG", 1000.0)
+# assuming similar scales for phi
 
 _surrogate: Optional[sfc.SurrogateBundle] = None
 _surrogate_load_error: Optional[str] = None
